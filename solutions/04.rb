@@ -1,119 +1,96 @@
 module Asm
+  class Compiler
+    attr_reader :instructions, :labels
 
-  def self.asm(&block)
-  	instructions = Instructions.new
-  	instructions.instance_eval &block
-  	# p instructions.registers
-    p instructions.operations_queue
-  	p instructions.next_instruction
+    def initialize
+      @instructions = []
+      @labels = {}
+    end
+
+    MUTATORS = [:mov, :inc, :dec, :cmp].freeze
+    JUMPERS = {
+      jmp: proc { true },
+      je:  proc { @last_cmp.zero? },
+      jne: proc { not @last_cmp.zero? },
+      jl:  proc { @last_cmp < 0 },
+      jle: proc { @last_cmp <= 0 },
+      jg:  proc { @last_cmp > 0 },
+      jge: proc { @last_cmp >= 0 },
+    }.freeze
+
+    MUTATORS.each do |mutator_name|
+      define_method mutator_name do |*arguments|
+        @instructions << [mutator_name, *arguments]
+      end
+    end
+
+    JUMPERS.each do |jumper_name, condition|
+      define_method jumper_name do |position|
+        @instructions << [:jmp, condition, position]
+      end
+    end
+
+    def label(name)
+      @labels[name] = @instructions.count
+    end
+
+    def method_missing(label_or_register_name)
+      label_or_register_name
+    end
+
+    def self.compile(&program)
+      compiler = new
+      compiler.instance_eval &program
+
+      [compiler.instructions, compiler.labels]
+    end
   end
 
-  class ArithmeticInstructions
-  	attr_reader :ax, :bx, :cx, :dx
-  	attr_reader :registers, :operations_queue
-
-  	def initialize
-  	  @operations_queue = []
-  	  @registers = {
-  	  	ax: 	0,
-  	  	bx: 	0,
-  	  	cx: 	0,
-  	  	dx: 	0,
-  	  }
-  	  @ax, @bx = :ax, :bx
-  	  @cx, @dx = :cx, :dx
-  	end
-
+  class Executor < Struct.new(:instructions, :labels, :ax, :bx, :cx, :dx)
     def mov(register, value)
-      if value.is_a? Fixnum
-        @registers[register.to_sym] = value
-      else
-      	@registers[register.to_sym] = @registers[value.to_sym]
-      end
-      @operations_queue << ['mov', [register.to_sym, value]]
+      self[register] = actual_value(value)
     end
 
-    def inc(register, value)
-      if value.is_a? Fixnum
-        @registers[register.to_sym] += value
-      else
-      	@registers[register.to_sym] += @registers[value.to_sym]
-      end
-      @operations_queue << ['inc', [register.to_sym, value]]
+    def inc(register, value = 1)
+      self[register] += actual_value(value)
     end
 
-    def dec(register, value)
-      if value.is_a? Fixnum
-        @registers[register.to_sym] -= value
-      else
-      	@registers[register.to_sym] -= @registers[value.to_sym]
-      end
-      @operations_queue << ['dec', [register.to_sym, value]]
+    def dec(register, value = 1)
+      self[register] -= actual_value(value)
     end
 
-    def cmp(register, value)
-      if value.is_a? Fixnum
-        @last_cmp_result = @registers[register.to_sym] <=> value
-      else
-      	@last_cmp_result = @registers[register.to_sym] <=> @registers[value.to_sym]
-      end
-      @operations_queue << ['cmp', [register.to_sym, value]]
-    end
-  end
-
-  class Instructions < ArithmeticInstructions
-    attr_reader :next_instruction
-
-  	def initialize
-  	  super()
-  	end
-
-    def label(value)
-      @operations_queue << ['label', value]
+    def cmp(comparant_one, comparant_two)
+      @last_cmp = actual_value(comparant_one) <=> actual_value(comparant_two)
     end
 
-    def jmp(where)
-      @operations_queue << ['jmp', where]
-      if where.is_a? Fixnum
-        @next_instruction = get_queue_index_if_number(where)
-      else
-        @next_instruction = get_queue_index_if_label(where)
-      end
+    def jmp(condition, position)
+      @current_instruction = actual_position(position).pred if instance_eval &condition
     end
 
-    def get_queue_index_if_number(where)
-      if where < @operations_queue.index { |operation, value| operation == 'label' }
-        return where
-      end
-      @operations_queue.each_with_index do |operation, index|
-        p where
-        if where == 0
-          return index + 1
-        elsif operation[0] != 'label'
-          where -= 1
+    def self.execute((instructions, labels))
+      new(instructions, labels, 0, 0, 0, 0).instance_eval do
+        @current_instruction = -1
+        while instructions[@current_instruction.next] do
+          @current_instruction += 1
+          send *instructions[@current_instruction]
         end
+
+        [ax, bx, cx, dx]
       end
     end
 
-    def get_queue_index_if_label(where)
-      @operations_queue.index { |operation, value| value == where } + 1
+    private
+
+    def actual_value(value)
+      value.is_a?(Symbol) ? self[value] : value
     end
 
-    def method_missing(method_name)
-      method_name
+    def actual_position(position)
+      labels.fetch(position, position)
     end
-
   end
-end
 
-
-Asm.asm do
-  mov bx, 40  #0
-  mov ax, 20  #1
-  label booty
-  inc bx, ax  #2
-  cmp ax, bx  #3
-  label ass
-  dec ax, 1   #4
-  jmp 3
+  def self.asm(&program)
+    Executor.execute(Compiler.compile &program)
+  end
 end
