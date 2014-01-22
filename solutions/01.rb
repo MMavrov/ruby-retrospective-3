@@ -1,10 +1,7 @@
 class Integer
   def prime?
-    if self > 0 and (2...self).find { |elem| self % elem == 0 } == nil
-      true
-    else
-      false
-    end
+    return false if self < 2
+    2.upto(pred).all? { |divisor| remainder(divisor).nonzero? }
   end
 
   def prime_factors
@@ -26,9 +23,7 @@ class Integer
   end
 
   def digits
-    return if self == 0
-    value = self < 0 ? -self : self
-    [(value/10).digits, value % 10].flatten.compact
+    abs.to_s.chars.map { |number| number.to_i }
   end
 end
 
@@ -52,9 +47,8 @@ class Array
   end
 
   def combine_with(other)
-    result = []
-    size = other.size < self.size ? self.size : other.size
-    (0...size).each { |idx| result << self[idx] << other[idx] }
-    result.compact
+    common = [length, other.length].min
+    excess = self[common...length] + other[common...other.length]
+    self[0...common].zip(other[0...common]).flatten(1) + excess
   end
 end
